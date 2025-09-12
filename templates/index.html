@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fashion AI Pipeline</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            padding: 40px;
+        }
+
+        .upload-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .upload-area {
+            border: 3px dashed #ddd;
+            border-radius: 15px;
+            padding: 60px 20px;
+            margin: 20px 0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #667eea;
+            background-color: #f8f9ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #667eea;
+            background-color: #f0f4ff;
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results-section {
+            margin-top: 40px;
+            display: none;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .result-card {
+            background: #f8f9ff;
+            border-radius: 15px;
+            padding: 25px;
+            border-left: 5px solid #667eea;
+        }
+
+        .result-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .result-card p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .visualization {
+            text-align: center;
+            margin: 30px 0;
+        }
+
+        .visualization img {
+            max-width: 100%;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 30px 0;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 5px solid #c62828;
+        }
+
+        .success {
+            background: #e8f5e8;
+            color: #2e7d32;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 5px solid #2e7d32;
+        }
+
+        .recommendations {
+            margin-top: 30px;
+        }
+
+        .recommendation-item {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-left: 5px solid #667eea;
+        }
+
+        .recommendation-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .recommendation-description {
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .recommendation-confidence {
+            font-size: 0.9em;
+            color: #888;
+        }
+
+        .outfit-suggestions {
+            margin-top: 30px;
+        }
+
+        .outfit-item {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 15px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-left: 5px solid #764ba2;
+        }
+
+        .outfit-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .outfit-description {
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .outfit-items {
+            margin-top: 15px;
+        }
+
+        .outfit-item-tag {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin: 5px;
+            font-size: 0.9em;
+        }
+
+        .outfit-item-tag.existing {
+            background: #4caf50;
+        }
+
+        .outfit-item-tag.suggested {
+            background: #ff9800;
+        }
+
+        @media (max-width: 768px) {
+            .results-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>👗 Fashion AI Pipeline</h1>
+            <p>AI-powered outfit analysis and recommendations</p>
+        </div>
+
+        <div class="main-content">
+            <div class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📸</div>
+                    <div class="upload-text">Drag & drop your image here or click to browse</div>
+                    <input type="file" id="fileInput" class="file-input" accept="image/*">
+                    <button class="btn" onclick="document.getElementById('fileInput').click()">
+                        Choose Image
+                    </button>
+                </div>
+                
+                <button class="btn" id="analyzeBtn" onclick="analyzeImage()" disabled>
+                    🔍 Analyze Outfit
+                </button>
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Analyzing your outfit...</p>
+            </div>
+
+            <div class="results-section" id="resultsSection">
+                <h2>Analysis Results</h2>
+                
+                <div class="visualization" id="visualization">
+                    <!-- Visualization image will be inserted here -->
+                </div>
+
+                <div class="results-grid">
+                    <div class="result-card">
+                        <h3>📊 Summary</h3>
+                        <div id="summaryContent">
+                            <!-- Summary will be inserted here -->
+                        </div>
+                    </div>
+                    
+                    <div class="result-card">
+                        <h3>🎨 Color Analysis</h3>
+                        <div id="colorContent">
+                            <!-- Color analysis will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="recommendations" id="recommendations">
+                    <h3>💡 Recommendations</h3>
+                    <div id="recommendationsContent">
+                        <!-- Recommendations will be inserted here -->
+                    </div>
+                </div>
+
+                <div class="outfit-suggestions" id="outfitSuggestions">
+                    <h3>👗 Outfit Suggestions</h3>
+                    <div id="outfitSuggestionsContent">
+                        <!-- Outfit suggestions will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFile = null;
+
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', handleDragOver);
+        uploadArea.addEventListener('dragleave', handleDragLeave);
+        uploadArea.addEventListener('drop', handleDrop);
+        fileInput.addEventListener('change', handleFileSelect);
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            const files = e.target.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        }
+
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showError('Please select an image file.');
+                return;
+            }
+
+            selectedFile = file;
+            analyzeBtn.disabled = false;
+            
+            // Show file name
+            const uploadText = document.querySelector('.upload-text');
+            uploadText.textContent = `Selected: ${file.name}`;
+        }
+
+        async function analyzeImage() {
+            if (!selectedFile) {
+                showError('Please select an image first.');
+                return;
+            }
+
+            showLoading(true);
+            hideError();
+
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayResults(result.results);
+                    showSuccess('Analysis completed successfully!');
+                } else {
+                    showError(result.error || 'Analysis failed.');
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function displayResults(results) {
+            // Show results section
+            document.getElementById('resultsSection').style.display = 'block';
+
+            // Display summary
+            const summary = results.summary;
+            document.getElementById('summaryContent').innerHTML = `
+                <p><strong>Items detected:</strong> ${summary.total_items_detected}</p>
+                <p><strong>Categories:</strong> ${summary.categories_found.join(', ')}</p>
+                <p><strong>Dominant colors:</strong> ${summary.dominant_colors.join(', ')}</p>
+                <p><strong>Overall style:</strong> ${summary.overall_style}</p>
+                <p><strong>Completeness:</strong> ${summary.outfit_completeness}</p>
+            `;
+
+            // Display color analysis
+            if (results.clothing_items && results.clothing_items.length > 0) {
+                const colorInfo = results.clothing_items[0];
+                document.getElementById('colorContent').innerHTML = `
+                    <p><strong>Primary colors:</strong> ${colorInfo.color_names.join(', ')}</p>
+                    <p><strong>Color harmony:</strong> ${colorInfo.color_harmony}</p>
+                    <p><strong>Style suggestion:</strong> ${colorInfo.style_suggestion}</p>
+                `;
+            }
+
+            // Display recommendations
+            if (results.recommendations && results.recommendations.length > 0) {
+                const recommendationsHtml = results.recommendations.map(rec => `
+                    <div class="recommendation-item">
+                        <div class="recommendation-title">${rec.title}</div>
+                        <div class="recommendation-description">${rec.description}</div>
+                        <div class="recommendation-confidence">Confidence: ${(rec.confidence * 100).toFixed(1)}%</div>
+                    </div>
+                `).join('');
+                document.getElementById('recommendationsContent').innerHTML = recommendationsHtml;
+            }
+
+            // Display outfit suggestions
+            if (results.outfit_suggestions && results.outfit_suggestions.length > 0) {
+                const outfitsHtml = results.outfit_suggestions.map(outfit => `
+                    <div class="outfit-item">
+                        <div class="outfit-name">${outfit.outfit_name}</div>
+                        <div class="outfit-description">${outfit.description}</div>
+                        <div class="outfit-items">
+                            ${outfit.items.map(item => `
+                                <span class="outfit-item-tag ${item.status}">
+                                    ${item.type} ${item.status === 'existing' ? '✓' : '→'}
+                                </span>
+                            `).join('')}
+                        </div>
+                    </div>
+                `).join('');
+                document.getElementById('outfitSuggestionsContent').innerHTML = outfitsHtml;
+            }
+
+            // Scroll to results
+            document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+            analyzeBtn.disabled = show;
+        }
+
+        function showError(message) {
+            hideError();
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.textContent = message;
+            document.querySelector('.upload-section').appendChild(errorDiv);
+        }
+
+        function hideError() {
+            const existingError = document.querySelector('.error');
+            if (existingError) {
+                existingError.remove();
+            }
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.textContent = message;
+            document.querySelector('.upload-section').appendChild(successDiv);
+            setTimeout(() => successDiv.remove(), 3000);
+        }
+    </script>
+</body>
+</html>
+
