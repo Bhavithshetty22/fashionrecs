@@ -1,5 +1,8 @@
 import os
 import argparse
+import json
+import time
+from pathlib import Path
 import torch
 import cv2
 from torchvision.transforms import functional as F
@@ -30,6 +33,12 @@ def main():
     parser.add_argument("--cpu", action="store_true", help="Force CPU (avoid CUDA DLL issues)")
     parser.add_argument("--max_dets", type=int, default=10, help="Max detections to draw (by score)")
     parser.add_argument("--no_masks", action="store_true", help="Disable mask overlay for clarity")
+    parser.add_argument("--save_crops_dir", type=str, default="fashion_out", help="Directory to save detection crops")
+    parser.add_argument("--run_color_after", action="store_true", help="Run color classification on saved crops")
+    parser.add_argument("--color_min_score", type=float, default=0.60, help="Min score for color classification candidates")
+    parser.add_argument("--color_nms_iou", type=float, default=0.5, help="IoU threshold for suppressing overlapping color candidates")
+    parser.add_argument("--color_top_k", type=int, default=0, help="If no candidates selected, fallback to top-K detections by score")
+    parser.add_argument("--run_pattern_local", action="store_true", help="Run local HuggingFace pattern classifier on saved crops and write unified JSON")
     args = parser.parse_args()
 
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
@@ -73,6 +82,47 @@ def main():
     if args.max_dets and len(keep_idx) > args.max_dets:
         keep_idx = keep_idx[:args.max_dets]
 
+    # Ensure crop output directory exists if we are saving crops
+    save_crops = args.save_crops_dir is not None and len(args.save_crops_dir) > 0
+    saved_crops = []
+    saved_meta = []  # metadata for unified analysis JSON
+    if save_crops:
+        os.makedirs(args.save_crops_dir, exist_ok=True)
+
+    # Prepare candidate indices for color classification: score gate + NMS to avoid duplicates
+    def iou(box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        iw = max(0, inter_x2 - inter_x1)
+        ih = max(0, inter_y2 - inter_y1)
+        inter = iw * ih
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+        union = area_a + area_b - inter + 1e-6
+        return inter / union
+
+    color_candidates = [i for i in keep_idx.tolist() if scores[i] >= args.color_min_score]
+    selected_for_color = []
+    for idx in color_candidates:
+        b = boxes[idx].astype(int)
+        suppress = False
+        for kept in selected_for_color:
+            if iou(b, boxes[kept].astype(int)) >= args.color_nms_iou:
+                suppress = True
+                break
+        if not suppress:
+            selected_for_color.append(idx)
+
+    print(f"Detections above score_thr: {len(keep_idx)} | candidates>=color_min_score: {len(color_candidates)} | selected after NMS: {len(selected_for_color)}")
+    if len(selected_for_color) == 0 and args.color_top_k > 0:
+        fallback = keep_idx.tolist()[: args.color_top_k]
+        selected_for_color = fallback
+        print(f"No candidates passed thresholds; falling back to top-{args.color_top_k} detections: {selected_for_color}")
+
     for i in keep_idx.tolist():
         x1, y1, x2, y2 = boxes[i].astype(int)
         cls_id = int(labels[i])
@@ -96,8 +146,134 @@ def main():
             colored = (np.stack([m * 0, m * 255, m * 0], axis=-1)).astype("uint8")
             vis = cv2.addWeighted(vis, 1.0, colored, 0.3, 0)
 
+        # Save crop only if selected for color classification
+        if save_crops and (i in selected_for_color):
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(W, x2), min(H, y2)
+            if x2c > x1c and y2c > y1c:
+                crop = img[y1c:y2c, x1c:x2c]
+                crop_name = f"det_{i:02d}_crop.jpg"
+                crop_path = os.path.join(args.save_crops_dir, crop_name)
+                try:
+                    cv2.imwrite(crop_path, crop)
+                    saved_crops.append(crop_path)
+                    saved_meta.append({
+                        "crop_file": crop_name,
+                        "det_index": i,
+                        "label": cls_name,
+                        "score": float(scores[i]),
+                        "box": [int(x1), int(y1), int(x2), int(y2)],
+                    })
+                except Exception as exc:
+                    print(f"Failed to save crop {crop_name}: {exc}")
+
+    if save_crops:
+        print(f"Saved {len(saved_crops)} crop(s) to: {os.path.abspath(args.save_crops_dir)}")
+
     cv2.imwrite(args.out, vis)
     print(f"Saved visualization: {args.out}")
+
+    # Optionally run color classification on saved crops
+    color_results = {}
+    if args.run_color_after and saved_crops:
+        try:
+            # Robust import similar to model import above
+            try:
+                from .classify_crops_colors import load_model, predict_color
+            except Exception:
+                try:
+                    from scripts.classify_crops_colors import load_model, predict_color
+                except Exception:
+                    import importlib.util
+                    here = os.path.dirname(__file__)
+                    cls_path = os.path.join(here, "classify_crops_colors.py")
+                    spec = importlib.util.spec_from_file_location("classify_crops_colors", cls_path)
+                    mod = importlib.util.module_from_spec(spec)
+                    assert spec and spec.loader
+                    spec.loader.exec_module(mod)
+                    load_model, predict_color = mod.load_model, mod.predict_color
+
+            model, processor, device = load_model("prithivMLmods/Fashion-Product-baseColour")
+            for cp in saved_crops:
+                try:
+                    pred = predict_color(Path(cp), model, processor, device)  # type: ignore[name-defined]
+                    color_results[os.path.basename(cp)] = pred
+                except Exception as exc:
+                    print(f"Color prediction failed for {cp}: {exc}")
+
+            colors_json = os.path.join(args.save_crops_dir, "fashion_colors.json")
+            with open(colors_json, "w", encoding="utf-8") as f:
+                json.dump(color_results, f, indent=2)
+            print(f"Saved color predictions for {len(color_results)} crops: {colors_json}")
+        except Exception as exc:
+            print(f"Failed running color classification: {exc}")
+
+    # Optionally run local pattern classification and write unified analysis JSON
+    if args.run_pattern_local and saved_crops:
+        try:
+            from PIL import Image as _Image
+            import torch as _torch
+            try:
+                from transformers import AutoImageProcessor as _AutoImageProcessor
+            except Exception:
+                from transformers import AutoFeatureExtractor as _AutoImageProcessor
+            from transformers import AutoModelForImageClassification as _AutoCls
+
+            pattern_model_name = "IrshadG/Clothes_Pattern_Classification_v2"
+            proc = _AutoImageProcessor.from_pretrained(pattern_model_name)
+            pmodel = _AutoCls.from_pretrained(pattern_model_name)
+            pmodel.eval()
+
+            pattern_results_local = {}
+            for cp in saved_crops:
+                try:
+                    im = _Image.open(cp).convert("RGB")
+                    inputs = proc(images=im, return_tensors="pt")
+                    with _torch.no_grad():
+                        logits = pmodel(**inputs).logits
+                        probs = _torch.nn.functional.softmax(logits, dim=-1)
+                        pred_idx = int(_torch.argmax(probs, dim=-1).item())
+                        label = pmodel.config.id2label[pred_idx]
+                        conf = float(probs[0, pred_idx].item())
+                    pattern_results_local[os.path.basename(cp)] = {"label": label, "score": round(conf, 4)}
+                except Exception as exc:
+                    print(f"Local pattern prediction failed for {cp}: {exc}")
+
+            # Build unified analysis entries
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            analysis_path = os.path.join(args.save_crops_dir, f"fashion_analysis_{timestamp}.json")
+            entries = []
+            for meta in saved_meta:
+                crop_file = meta["crop_file"]
+                # Color: choose top color if we have per-class scores
+                color_item = {"label": None, "score": None}
+                c = color_results.get(crop_file)
+                if isinstance(c, dict):
+                    try:
+                        scores_map = c.get("scores", {})
+                        if scores_map:
+                            top_color = max(scores_map, key=lambda k: scores_map[k])
+                            color_item = {"label": top_color, "score": scores_map[top_color]}
+                        else:
+                            color_item = {"label": c.get("label"), "score": c.get("score")}
+                    except Exception:
+                        color_item = {"label": c.get("label"), "score": c.get("score")}
+
+                p = pattern_results_local.get(crop_file, {"label": None, "score": None})
+                entries.append({
+                    "crop_file": crop_file,
+                    "det_label": meta["label"],
+                    "det_score": meta["score"],
+                    "box": meta["box"],
+                    "color": color_item,
+                    "pattern": p,
+                })
+
+            with open(analysis_path, "w", encoding="utf-8") as f:
+                json.dump({"items": entries}, f, indent=2)
+            print(f"Saved unified fashion analysis with {len(entries)} items: {analysis_path}")
+        except Exception as exc:
+            print(f"Failed running local pattern classification: {exc}")
 
 
 if __name__ == "__main__":
