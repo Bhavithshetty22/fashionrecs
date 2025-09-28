@@ -1,0 +1,27 @@
+{
+  "model_architecture": "AdvancedFashionModel",
+  "embedding_dim": 256,
+  "dropout_rate": 0.3,
+  "total_parameters": 1564160,
+  "trainable_parameters": 1564160,
+  "training_epochs": 49,
+  "final_train_loss": 0.5314823242002412,
+  "final_val_loss": 1.8725245312640542,
+  "best_val_loss": 1.3714439555218345,
+  "dataset_size": 6014,
+  "feature_dim": 94,
+  "data_sources": [
+    {
+      "type": "json",
+      "path": "dataset/fashion_dataset_1000 (3).json"
+    },
+    {
+      "type": "json",
+      "path": "fashion_out/fashion_analysis_20250927_184554.json"
+    },
+    {
+      "type": "generated",
+      "count": 5000
+    }
+  ]
+}

@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--color_nms_iou", type=float, default=0.5, help="IoU threshold for suppressing overlapping color candidates")
     parser.add_argument("--color_top_k", type=int, default=0, help="If no candidates selected, fallback to top-K detections by score")
     parser.add_argument("--run_pattern_local", action="store_true", help="Run local HuggingFace pattern classifier on saved crops and write unified JSON")
+    parser.add_argument("--run_season_local", action="store_true", help="Run local HuggingFace season classifier on saved crops and write unified JSON")
     args = parser.parse_args()
 
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
@@ -208,8 +209,8 @@ def main():
         except Exception as exc:
             print(f"Failed running color classification: {exc}")
 
-    # Optionally run local pattern classification and write unified analysis JSON
-    if args.run_pattern_local and saved_crops:
+    # Optionally run local pattern and season classification and write unified analysis JSON
+    if (args.run_pattern_local or args.run_season_local) and saved_crops:
         try:
             from PIL import Image as _Image
             import torch as _torch
@@ -218,26 +219,79 @@ def main():
             except Exception:
                 from transformers import AutoFeatureExtractor as _AutoImageProcessor
             from transformers import AutoModelForImageClassification as _AutoCls
-
-            pattern_model_name = "IrshadG/Clothes_Pattern_Classification_v2"
-            proc = _AutoImageProcessor.from_pretrained(pattern_model_name)
-            pmodel = _AutoCls.from_pretrained(pattern_model_name)
-            pmodel.eval()
+            from transformers import SiglipForImageClassification as _SiglipForImageClassification
 
             pattern_results_local = {}
+            season_results_local = {}
+            
+            # Load pattern model if requested
+            if args.run_pattern_local:
+                pattern_model_name = "IrshadG/Clothes_Pattern_Classification_v2"
+                proc = _AutoImageProcessor.from_pretrained(pattern_model_name)
+                pmodel = _AutoCls.from_pretrained(pattern_model_name)
+                pmodel.eval()
+
+            # Load season model if requested
+            if args.run_season_local:
+                season_model_name = "prithivMLmods/Fashion-Product-Season"
+                season_proc = _AutoImageProcessor.from_pretrained(season_model_name)
+                season_model = _SiglipForImageClassification.from_pretrained(season_model_name)
+                season_model.eval()
+                season_id2label = {0: "Fall", 1: "Spring", 2: "Summer", 3: "Winter"}
+
             for cp in saved_crops:
                 try:
                     im = _Image.open(cp).convert("RGB")
-                    inputs = proc(images=im, return_tensors="pt")
-                    with _torch.no_grad():
-                        logits = pmodel(**inputs).logits
-                        probs = _torch.nn.functional.softmax(logits, dim=-1)
-                        pred_idx = int(_torch.argmax(probs, dim=-1).item())
-                        label = pmodel.config.id2label[pred_idx]
-                        conf = float(probs[0, pred_idx].item())
-                    pattern_results_local[os.path.basename(cp)] = {"label": label, "score": round(conf, 4)}
+                    
+                    # Pattern classification
+                    if args.run_pattern_local:
+                        inputs = proc(images=im, return_tensors="pt")
+                        with _torch.no_grad():
+                            logits = pmodel(**inputs).logits
+                            probs = _torch.nn.functional.softmax(logits, dim=-1)
+                            pred_idx = int(_torch.argmax(probs, dim=-1).item())
+                            label = pmodel.config.id2label[pred_idx]
+                            conf = float(probs[0, pred_idx].item())
+                        pattern_results_local[os.path.basename(cp)] = {"label": label, "score": round(conf, 4)}
+                    
+                    # Season classification
+                    if args.run_season_local:
+                        try:
+                            # Try to use improved classifier first
+                            from improved_season_classifier import ImprovedSeasonClassifier
+                            improved_classifier = ImprovedSeasonClassifier()
+                            
+                            # Get clothing type from detection results
+                            clothing_type = "unknown"
+                            for meta in saved_meta:
+                                if meta["crop_file"] == os.path.basename(cp):
+                                    clothing_type = meta["label"]
+                                    break
+                            
+                            result = improved_classifier.classify_season(im, clothing_type)
+                            season_results_local[os.path.basename(cp)] = {
+                                "label": result["label"], 
+                                "score": result["score"],
+                                "method": result["method"]
+                            }
+                        except Exception as e:
+                            print(f"Improved classifier failed, falling back to ML-only: {e}")
+                            # Fallback to original ML approach
+                            inputs = season_proc(images=im, return_tensors="pt")
+                            with _torch.no_grad():
+                                logits = season_model(**inputs).logits
+                                probs = _torch.nn.functional.softmax(logits, dim=-1)
+                                pred_idx = int(_torch.argmax(probs, dim=-1).item())
+                                label = season_id2label[pred_idx]
+                                conf = float(probs[0, pred_idx].item())
+                            season_results_local[os.path.basename(cp)] = {
+                                "label": label, 
+                                "score": round(conf, 4),
+                                "method": "ml_fallback"
+                            }
+                        
                 except Exception as exc:
-                    print(f"Local pattern prediction failed for {cp}: {exc}")
+                    print(f"Local prediction failed for {cp}: {exc}")
 
             # Build unified analysis entries
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -260,6 +314,7 @@ def main():
                         color_item = {"label": c.get("label"), "score": c.get("score")}
 
                 p = pattern_results_local.get(crop_file, {"label": None, "score": None})
+                s = season_results_local.get(crop_file, {"label": None, "score": None})
                 entries.append({
                     "crop_file": crop_file,
                     "det_label": meta["label"],
@@ -267,13 +322,14 @@ def main():
                     "box": meta["box"],
                     "color": color_item,
                     "pattern": p,
+                    "season": s,
                 })
 
             with open(analysis_path, "w", encoding="utf-8") as f:
                 json.dump({"items": entries}, f, indent=2)
             print(f"Saved unified fashion analysis with {len(entries)} items: {analysis_path}")
         except Exception as exc:
-            print(f"Failed running local pattern classification: {exc}")
+            print(f"Failed running local pattern/season classification: {exc}")
 
 
 if __name__ == "__main__":
